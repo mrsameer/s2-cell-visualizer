@@ -7,8 +7,10 @@ export interface S2CellInfo {
     polygon: [number, number][]; // [lat, lng]
 }
 
+// Helper to convert radians to degrees
+const toDegrees = (rad: number) => rad * (180 / Math.PI);
+
 export const getCellFromPoint = (lat: number, lng: number, level: number): S2CellInfo => {
-    // @ts-ignore - s2js types are not perfect
     const s2 = S2.s2;
     const latLng = s2.LatLng.fromDegrees(lat, lng);
     const cellIdBigInt = s2.cellid.fromLatLng(latLng);
@@ -22,8 +24,8 @@ export const getCellFromPoint = (lat: number, lng: number, level: number): S2Cel
     for (let i = 0; i < 4; i++) {
         const v = cell.vertex(i);
         const vLatLng = s2.LatLng.fromPoint(v);
-        // Based on debug output, LatLng instance has lat/lng properties
-        vertices.push([vLatLng.lat, vLatLng.lng]);
+        // s2js returns radians, convert to degrees
+        vertices.push([toDegrees(vLatLng.lat), toDegrees(vLatLng.lng)]);
     }
 
     return {
@@ -35,24 +37,59 @@ export const getCellFromPoint = (lat: number, lng: number, level: number): S2Cel
 };
 
 export const getCellsInBounds = (bounds: any, level: number): S2CellInfo[] => {
-    const center = bounds.getCenter();
     try {
-        const centerCell = getCellFromPoint(center.lat, center.lng, level);
-        return [centerCell];
+        const s2 = S2.s2;
+
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+
+        const p1 = s2.LatLng.fromDegrees(sw.lat, sw.lng);
+        const p2 = s2.LatLng.fromDegrees(ne.lat, ne.lng);
+
+        const r1 = s2.Rect.fromLatLng(p1);
+        const r2 = s2.Rect.fromLatLng(p2);
+        const rect = r1.union(r2);
+
+        const coverer = new s2.RegionCoverer();
+        coverer.minLevel = level;
+        coverer.maxLevel = level;
+        coverer.maxCells = 500; // Limit to prevent performance issues
+
+        const cellIds = coverer.covering(rect);
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return cellIds.map((cellId: any) => {
+            const id = cellId.toString();
+            const token = s2.cellid.toToken(cellId);
+            const cell = s2.Cell.fromCellID(cellId);
+
+            const vertices: [number, number][] = [];
+            for (let i = 0; i < 4; i++) {
+                const v = cell.vertex(i);
+                const vLatLng = s2.LatLng.fromPoint(v);
+                vertices.push([toDegrees(vLatLng.lat), toDegrees(vLatLng.lng)]);
+            }
+
+            return {
+                id,
+                token,
+                level,
+                polygon: vertices
+            };
+        });
+
     } catch (e) {
-        console.error("Error getting cell in bounds", e);
+        console.error("Error getting cells in bounds", e);
         return [];
     }
 };
 
 export const decodeCell = (token: string): S2CellInfo | null => {
     try {
-        // @ts-ignore
         const s2 = S2.s2;
         const cellId = s2.cellid.fromToken(token);
         const id = cellId.toString();
-        const level = s2.cellid.level(cellId); // Assuming static level method exists or we need to find it
-        // Debug output showed 'level' in cellid keys.
+        const level = s2.cellid.level(cellId);
 
         const cell = s2.Cell.fromCellID(cellId);
 
@@ -60,7 +97,7 @@ export const decodeCell = (token: string): S2CellInfo | null => {
         for (let i = 0; i < 4; i++) {
             const v = cell.vertex(i);
             const vLatLng = s2.LatLng.fromPoint(v);
-            vertices.push([vLatLng.lat, vLatLng.lng]);
+            vertices.push([toDegrees(vLatLng.lat), toDegrees(vLatLng.lng)]);
         }
 
         return {
